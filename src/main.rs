@@ -31,7 +31,10 @@ fn main() -> ! {
     let mut delay = Delay::new(&clocks);
     let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
     
-    // let timg0 = TimerGroup::new_async(peripherals.TIMG0, &clocks);
+    let timg0 = TimerGroup::new_async(peripherals.TIMG0, &clocks);
+    let timg1 = TimerGroup::new_async(peripherals.TIMG1, &clocks);
+    let mut wdt0 = timg0.wdt;
+    let mut wdt1 = timg1.wdt;
     esp_println::logger::init_logger_from_env();
     let mut i2c = I2C::new(
         peripherals.I2C0,
@@ -41,6 +44,8 @@ fn main() -> ! {
         &clocks,
         None,
     );
+    // wdt0.disable();
+    // wdt1.disable();
     let mut sender = I2cSender::new(&mut i2c, 0x27);
     let lcd_config = lcd::Config::default().set_data_width(DataWidth::Bit4);
     let mut lcd= Lcd::new(&mut sender, &mut delay, lcd_config, 10);

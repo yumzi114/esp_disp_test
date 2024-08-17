@@ -3,16 +3,19 @@
 
 use esp_backtrace as _;
 use esp_hal::{
-    rtc_cntl::Rtc,
     clock::ClockControl, 
     delay::Delay, 
-    gpio::IO, 
+    gpio::{self, Event, Input, PullDown, PullUp, IO}, 
     i2c::I2C, 
     peripherals::Peripherals, 
     prelude::*, 
+    rtc_cntl::Rtc, 
     system::SystemClockControl, 
-    timer::TimerGroup 
+    timer::{TimerGroup, TimerInterrupts} 
 };
+use core::{borrow::Borrow, cell::RefCell, fmt::Debug};
+
+use critical_section::Mutex;
 // use embedded_hal::i2c::{I2c, Error};
 use lcd1602_driver::{
     command::{DataWidth, MoveDirection, State},
@@ -20,22 +23,41 @@ use lcd1602_driver::{
     sender::I2cSender,
     utils::BitOps,
 };
+use heapless::String;
 const HEART: [u8; 8] = [
     0b00000, 0b00000, 0b01010, 0b11111, 0b01110, 0b00100, 0b00000, 0b00000,
 ];
+
+static BUTTON: Mutex<RefCell<Option<gpio::Gpio0<Input<PullUp>>>>> =
+    Mutex::new(RefCell::new(None));
+
+
 #[entry]
 fn main() -> ! {
     let peripherals = Peripherals::take();
     let system = peripherals.SYSTEM.split();
-    let clocks = ClockControl::max(system.clock_control).freeze();
+    let clocks = ClockControl::boot_defaults(system.clock_control).freeze();
+    let mut rtc = Rtc::new(peripherals.LPWR,None);
     let mut delay = Delay::new(&clocks);
-    let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
-    
-    let timg0 = TimerGroup::new_async(peripherals.TIMG0, &clocks);
-    let timg1 = TimerGroup::new_async(peripherals.TIMG1, &clocks);
+    let mut io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
+    io.set_interrupt_handler(handler);
+    let timerinter = TimerInterrupts::default();
+    let timg0 = TimerGroup::new(peripherals.TIMG0, &clocks,None);
+    let timg1 = TimerGroup::new(peripherals.TIMG1, &clocks,None);
     let mut wdt0 = timg0.wdt;
     let mut wdt1 = timg1.wdt;
+    rtc.swd.disable();
+    rtc.rwdt.disable();
+    wdt0.disable();
+    wdt1.disable();
     esp_println::logger::init_logger_from_env();
+    let mut led = io.pins.gpio4.into_push_pull_output();
+    // #[cfg(any(feature = "esp32", feature = "esp32c2", feature = "esp32c2"))]
+    let mut button = io.pins.gpio0.into_pull_up_input();
+    
+    // #[cfg(not(any(feature = "esp32", feature = "esp32c2", feature = "esp32c3")))]
+    // let mut button = io.pins.gpio9.into_pull_down_input();
+    // let button = io.pins.gpio0.into_pull_up_input();
     let mut i2c = I2C::new(
         peripherals.I2C0,
         io.pins.gpio3,
@@ -44,11 +66,17 @@ fn main() -> ! {
         &clocks,
         None,
     );
-    // wdt0.disable();
-    // wdt1.disable();
+    critical_section::with(|cs| {
+        button.listen(Event::FallingEdge);
+        BUTTON.borrow_ref_mut(cs).replace(button)
+    });
+    led.set_low();
+    // let mut del_var = 2000_u32.millis();
+    
     let mut sender = I2cSender::new(&mut i2c, 0x27);
     let lcd_config = lcd::Config::default().set_data_width(DataWidth::Bit4);
-    let mut lcd= Lcd::new(&mut sender, &mut delay, lcd_config, 10);
+    let mut delay1=delay.clone();
+    let mut lcd= Lcd::new(&mut sender, &mut delay1, lcd_config, 10);
     lcd.write_graph_to_cgram(1, &HEART);
     let mut graph_data = lcd.read_graph_from_cgram(1);
     graph_data[1].set_bit(2);
@@ -56,90 +84,62 @@ fn main() -> ! {
     lcd.write_graph_to_cgram(2, &graph_data);
     lcd.set_cursor_blink_state(State::On);
     lcd.set_cursor_pos((1, 0));
-    
-
+    // lcd.offset_cursor_pos((1, 0));
+    lcd.write_str_to_cur("whatup");
+    let s1: String<6> = String::try_from(" : ").unwrap();
+    let s2: String<4> = String::try_from("Hz").unwrap();
+    let mut num = 1;
+    // lcd.set_backlight(State::Off);
     loop {
+        // lcd.typewriter_write("yumi,", 250_000);
+        critical_section::with(|cs| {
+            if BUTTON.borrow_ref_mut(cs).as_mut().unwrap().is_low(){
+                led.set_high();
+                num+=1;
+                let nums: String<10> = String::try_from(num).unwrap();
+                // lcd.set_backlight(State::On);
+                lcd.set_cursor_pos((1, 0));
+                lcd.write_str_to_cur("whatup");
+                // lcd.delay_ms(250);
+                delay.delay_millis(250);
+                
+                // lcd.write_str_to_cur(" : 100Mz");
+                lcd.write_str_to_cur(s1.as_str());
+                lcd.write_str_to_cur(nums.as_str());
+                lcd.write_str_to_cur(s2.as_str());
+                // esp_println::println!("dasd");
+                lcd.delay_ms(150);
+                delay.delay_millis(100);
+            }else{
+                // lcd.set_backlight(State::Off);
+                led.set_low();
+            }
+        });
         
-
-        // type writer effect
-        lcd.typewriter_write("yumi,", 250_000);
-
-        // relative cursor move
-        lcd.offset_cursor_pos((1, 0));
-
-        // to test write string to cur pos
-        lcd.write_str_to_cur("whatup");
-
-        // manually delay
-        lcd.delay_ms(250);
-
-        let line_capacity = lcd.get_line_capacity();
-
-        // to test write character to specified position
-        // since tilde chracter (~) is not in CGROM of LCD1602A
-        // it should be displayed as a full rectangle
-        lcd.write_char_to_pos('~', (15, 0));
-
-        // manually delay
-        lcd.delay_ms(250);
-
-        // to test whether line break works well
-        // set cursor to the end of first line, and write a vertical line
-        lcd.set_cursor_pos((line_capacity - 1, 0));
-        lcd.write_char_to_cur('|');
-
-        // turn off cursor blinking, so that cursor will only be a underline
-        lcd.set_cursor_blink_state(State::Off);
-
-        lcd.typewriter_write("Hello, ", 250_000);
-
-        // to test right to left write in
-        // move cursor to left end of display window, then type string in reverse order
-        lcd.set_direction(MoveDirection::RightToLeft);
-        lcd.set_cursor_pos((15, 1));
-        lcd.typewriter_write("~!", 250_000);
-        // and the 2 type of split flap display effect
-        lcd.split_flap_write("2061", FlipStyle::Simultaneous, None, 150_000, None);
-        lcd.split_flap_write(
-            "DCL",
-            FlipStyle::Sequential,
-            Some(10),
-            150_000,
-            Some(250_000),
-        );
-
-        lcd.set_cursor_state(State::Off);
-
-        // replace 2 rectangle with custom heart shape and diamond shape
-        lcd.delay_ms(1_000);
-        lcd.write_graph_to_pos(1, (15, 0));
-        lcd.delay_ms(1_000);
-        lcd.write_graph_to_pos(2, (15, 1));
-
-        // to test read from DDRAM
-        // read from first line end, and write same character to the second line end
-        let char_at_end = lcd.read_byte_from_pos((39, 0));
-        lcd.write_byte_to_pos(char_at_end, (39, 1));
-
-        // shift display window
-        lcd.delay_ms(1_000);
-        lcd.shift_display_to_pos(2, MoveStyle::Shortest, State::On, 250_000);
-        lcd.delay_ms(1_000);
-        lcd.shift_display_to_pos(40 - 2, MoveStyle::Shortest, State::On, 250_000);
-        lcd.delay_ms(1_000);
-        lcd.shift_display_to_pos(0, MoveStyle::Shortest, State::On, 250_000);
-
-        // and blinking display 3 times
-        lcd.delay_ms(1_000);
-        lcd.full_display_blink(3, 500_000);
-
-        // and blinking backlight 3 times
-        for _ in 0..3 {
-            lcd.delay_ms(500);
-            lcd.set_backlight(State::Off);
-            lcd.delay_ms(500);
-            lcd.set_backlight(State::On);
-        }
-        // delay.delay(500.millis());
+        // led.toggle();
+        delay.delay_millis(100);
     }
+}
+#[handler]
+#[ram]
+fn handler() {
+    if critical_section::with(|cs| {
+        BUTTON
+            .borrow_ref_mut(cs)
+            .as_mut()
+            .unwrap()
+            .is_interrupt_set()
+    }) {
+        esp_println::println!("Button was the source of the interrupt");
+    } else {
+        esp_println::println!("Button was not the source of the interrupt");
+    }
+
+    critical_section::with(|cs| {
+        BUTTON
+            .borrow_ref_mut(cs)
+            .as_mut()
+            .unwrap()
+            .clear_interrupt()
+    });
 }

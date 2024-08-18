@@ -86,7 +86,10 @@ fn main() -> ! {
     lcd.set_cursor_pos((1, 0));
     // lcd.offset_cursor_pos((1, 0));
     lcd.write_str_to_cur("whatup");
+    lcd.set_cursor_blink_state(State::Off);
+    lcd.set_cursor_state(State::Off);
     let s1: String<6> = String::try_from(" : ").unwrap();
+    lcd.write_str_to_cur(s1.as_str());
     let s2: String<4> = String::try_from("Hz").unwrap();
     let mut num = 1;
     // lcd.set_backlight(State::Off);
@@ -98,18 +101,23 @@ fn main() -> ! {
                 num+=1;
                 let nums: String<10> = String::try_from(num).unwrap();
                 // lcd.set_backlight(State::On);
-                lcd.set_cursor_pos((1, 0));
-                lcd.write_str_to_cur("whatup");
+                // 되는거 ---------------------------------
+                lcd.set_cursor_pos((10, 0));
+                // lcd.write_str_to_cur("whatup");
                 // lcd.delay_ms(250);
-                delay.delay_millis(250);
-                
+                // delay.delay_millis(250);
                 // lcd.write_str_to_cur(" : 100Mz");
-                lcd.write_str_to_cur(s1.as_str());
+                // lcd.write_str_to_cur(s1.as_str());
                 lcd.write_str_to_cur(nums.as_str());
                 lcd.write_str_to_cur(s2.as_str());
                 // esp_println::println!("dasd");
-                lcd.delay_ms(150);
-                delay.delay_millis(100);
+                // lcd.delay_ms(150);
+                
+                delay.delay_millis(1);
+                // 되는거 ---------------------------------
+                // 테스트 ---------------------------------
+                // lcd.set_cursor_pos((6, 0));
+
             }else{
                 // lcd.set_backlight(State::Off);
                 led.set_low();
